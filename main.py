@@ -22,11 +22,13 @@ ______ _            _   ______
     """)
     pygame.init()
     pygame.mixer.init()
-    try:
-        pygame.mixer.music.load("sounds/1.mp3")
-        pygame.mixer.music.play()
-    except Exception as e:
-        print("Erreur lors de la lecture du son :", e)
     game = Game()
+    # Lance la musique seulement si le son est activé
+    if game.sound_enabled:
+        try:
+            pygame.mixer.music.load("sounds/1.mp3")
+            pygame.mixer.music.play()
+        except Exception as e:
+            print("Erreur lors de la lecture du son :", e)
     game.run()
     pygame.quit() 

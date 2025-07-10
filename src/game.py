@@ -56,6 +56,12 @@ class Game:
             self.invalid_drop_sound = None
         self.has_bomb = False
         self.bomb_given = False
+        self.in_main_menu = True
+        self.menu_options = ["Jouer", "Paramètres", "Quitter"]
+        self.menu_selected = 0
+        self.game_mode = None
+        self.timer_30s = 30
+        self.timer_started = False
 
     def load_best_score(self):
         if os.path.exists(BEST_SCORE_FILE):
@@ -118,6 +124,8 @@ class Game:
         self.particles = []
         self.score_anim_timer = 0
         self.game_over = False
+        self.bomb_given = False
+        self.timer_started = False
 
     def load_settings(self):
         if os.path.exists(SETTINGS_FILE):
@@ -125,19 +133,30 @@ class Game:
                 with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.sound_enabled = data.get("sound_enabled", True)
+                    self.game_mode = data.get("game_mode", "normal")
             except Exception as e:
                 print("Erreur lecture settings.json:", e)
 
     def save_settings(self):
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump({"sound_enabled": self.sound_enabled}, f)
+                json.dump({"sound_enabled": self.sound_enabled, "game_mode": self.game_mode}, f)
         except Exception as e:
             print("Erreur écriture settings.json:", e)
 
     def run(self):
         while self.running:
+            if self.in_main_menu:
+                self.handle_menu_events()
+                self.draw_main_menu()
+                self.clock.tick(60)
+                continue
             self.handle_events()
+            # Si on quitte les paramètres depuis le menu principal, on revient au menu principal
+            if not self.show_settings_menu and hasattr(self, 'was_in_settings_from_menu') and self.was_in_settings_from_menu:
+                self.in_main_menu = True
+                self.was_in_settings_from_menu = False
+                continue
             self.update()
             # Donne une bombe si le score atteint 50 et pas déjà donnée
             if self.score >= 50 and not self.bomb_given:
@@ -148,12 +167,52 @@ class Game:
                 pygame.time.delay(40)  # ralentit la boucle
             self.clock.tick(60)
 
+    def handle_menu_events(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_UP:
+                    self.menu_selected = (self.menu_selected - 1) % len(self.menu_options)
+                elif event.key == pygame.K_DOWN:
+                    self.menu_selected = (self.menu_selected + 1) % len(self.menu_options)
+                elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                    if self.menu_options[self.menu_selected] == "Jouer":
+                        self.in_main_menu = False
+                        if self.game_mode == "30s":
+                            self.timer_30s = 30
+                            self.timer_started = True
+                    elif self.menu_options[self.menu_selected] == "Paramètres":
+                        self.show_settings_menu = True
+                        self.was_in_settings_from_menu = True
+                        self.in_main_menu = False
+                    elif self.menu_options[self.menu_selected] == "Quitter":
+                        self.running = False
+
+    def draw_main_menu(self):
+        self.screen.fill((30, 40, 70))
+        font = pygame.font.SysFont(None, 80)
+        title = font.render("Block Boom", True, (255, 215, 0))
+        rect = title.get_rect(center=(self.screen.get_width()//2, 150))
+        self.screen.blit(title, rect)
+        font2 = pygame.font.SysFont(None, 48)
+        for i, option in enumerate(self.menu_options):
+            color = (255,255,255) if i != self.menu_selected else (255, 215, 0)
+            opt_text = font2.render(option, True, color)
+            opt_rect = opt_text.get_rect(center=(self.screen.get_width()//2, 300 + i*80))
+            self.screen.blit(opt_text, opt_rect)
+        pygame.display.flip()
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
             # Gestion du menu paramètres
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                # Si on quitte les paramètres et on venait du menu principal, on ne lance pas le jeu
+                if hasattr(self, 'was_in_settings_from_menu') and self.was_in_settings_from_menu:
+                    self.show_settings_menu = False
+                    return
                 self.show_settings_menu = not self.show_settings_menu
                 return
             if self.show_settings_menu:
@@ -165,6 +224,12 @@ class Game:
                             pygame.mixer.music.set_volume(1.0)
                         else:
                             pygame.mixer.music.set_volume(0.0)
+                    elif event.key == pygame.K_m:
+                        if self.game_mode == "normal" or self.game_mode is None:
+                            self.game_mode = "30s"
+                        else:
+                            self.game_mode = "normal"
+                        self.save_settings()
                     if event.key == pygame.K_ESCAPE:
                         self.show_settings_menu = False
                 return
@@ -253,6 +318,14 @@ class Game:
             self.slow_motion_timer -= 1
         if self.combo_flash_timer > 0:
             self.combo_flash_timer -= 1
+        # Gestion du timer 30 secondes
+        if self.game_mode == "30s" and self.timer_started:
+            self.timer_30s -= 1/60  # 60 FPS
+            if self.timer_30s <= 0:
+                self.game_over = True
+                if self.score > self.best_score:
+                    self.best_score = self.score
+                    self.save_best_score()
 
     def draw(self):
         # Effet flash combo
@@ -299,13 +372,22 @@ class Game:
                 px = self.grid.origin[0] + grid_x * (self.grid.cell_size + self.grid.spacing)
                 py = self.grid.origin[1] + grid_y * (self.grid.cell_size + self.grid.spacing)
                 self.selected_block.draw_preview(self.screen, px, py, valid=True)
+        # Affichage du timer en mode 30 secondes
+        if self.game_mode == "30s" and self.timer_started:
+            timer_font = pygame.font.SysFont(None, 48)
+            timer_text = timer_font.render(f"Temps: {int(self.timer_30s)}s", True, (255, 255, 0))
+            timer_rect = timer_text.get_rect(center=(self.screen.get_width()//2, 50))
+            self.screen.blit(timer_text, timer_rect)
         # Affichage de l'écran de défaite
         if self.game_over:
             overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
             overlay.fill((0,0,0,180))
             self.screen.blit(overlay, (0,0))
             font = pygame.font.SysFont(None, 80)
-            text = font.render("Défaite !", True, (255, 80, 80))
+            if self.game_mode == "30s":
+                text = font.render("Temps écoulé !", True, (255, 80, 80))
+            else:
+                text = font.render("Défaite !", True, (255, 80, 80))
             rect = text.get_rect(center=(self.screen.get_width()//2, self.screen.get_height()//2 - 60))
             self.screen.blit(text, rect)
             font2 = pygame.font.SysFont(None, 48)
@@ -333,9 +415,13 @@ class Game:
             sound_text = font2.render(f"Son : {sound_status} (S)", True, (255,255,0))
             rect2 = sound_text.get_rect(center=(self.screen.get_width()//2, 300))
             self.screen.blit(sound_text, rect2)
+            mode_status = "30 Secondes" if self.game_mode == "30s" else "Normal"
+            mode_text = font2.render(f"Mode : {mode_status} (M)", True, (255,255,0))
+            rect3 = mode_text.get_rect(center=(self.screen.get_width()//2, 380))
+            self.screen.blit(mode_text, rect3)
             quit_text = font2.render("Appuyez sur Echap pour fermer", True, (200,200,200))
-            rect3 = quit_text.get_rect(center=(self.screen.get_width()//2, 400))
-            self.screen.blit(quit_text, rect3)
+            rect4 = quit_text.get_rect(center=(self.screen.get_width()//2, 460))
+            self.screen.blit(quit_text, rect4)
             pygame.display.flip()
             return
         pygame.display.flip() 
